@@ -176,6 +176,7 @@ try:
     from http.cookiejar import MozillaCookieJar
 except ImportError:
     # Fallback for Python 2
+    print "Fallback for Python 2"
     from urllib2 import Request, build_opener, HTTPCookieProcessor
     from urllib import quote, unquote
     from cookielib import MozillaCookieJar
@@ -482,7 +483,8 @@ class ScholarArticleParser(object):
                     self._strip_url_arg('num', self._path2url(tag.get('href')))
 
             if tag.getText().startswith('Import'):
-                self.article['url_citation'] = self._path2url(tag.get('href'))
+            #   self.article['url_citation'] = self._path2url(tag.get('href'))
+                self.article['url_citation'] = tag.get('href')
 
 
     @staticmethod
@@ -975,6 +977,7 @@ class ScholarQuerier(object):
                                        log_msg='dump of settings form HTML',
                                        err_msg='requesting settings failed')
         if html is None:
+            print self.SET_SETTINGS_URL % urlargs
             return False
 
         # Now parse the required stuff out of the form. We require the
@@ -982,7 +985,8 @@ class ScholarQuerier(object):
         # to Google.
         soup = SoupKitchen.make_soup(html)
 
-        tag = soup.find(name='form', attrs={'id': 'gs_settings_form'})
+      # tag = soup.find(name='form', attrs={'id': 'gs_settings_form'})
+        tag = soup.find(name='form', attrs={'id': 'gs_bdy_frm'})
         if tag is None:
             ScholarUtils.log('info', 'parsing settings failed: no form')
             return False
