@@ -166,6 +166,14 @@ import os
 import re
 import sys
 import warnings
+import time
+import datetime
+
+#import logging
+#logging.basicConfig(filename='scholar.log',level=logging.DEBUG)
+#logging.debug('This message should go to the log file')
+#logging.info('So should this')
+#logging.warning('And this, too')
 
 try:
     # Try importing for Python 3
@@ -176,7 +184,6 @@ try:
     from http.cookiejar import MozillaCookieJar
 except ImportError:
     # Fallback for Python 2
-    print "Fallback for Python 2"
     from urllib2 import Request, build_opener, HTTPCookieProcessor
     from urllib import quote, unquote
     from cookielib import MozillaCookieJar
@@ -483,7 +490,7 @@ class ScholarArticleParser(object):
                     self._strip_url_arg('num', self._path2url(tag.get('href')))
 
             if tag.getText().startswith('Import'):
-            #   self.article['url_citation'] = self._path2url(tag.get('href'))
+#               self.article['url_citation'] = self._path2url(tag.get('href'))
                 self.article['url_citation'] = tag.get('href')
 
 
@@ -569,9 +576,9 @@ class ScholarArticleParser120726(ScholarArticleParser):
         for tag in div:
             if not hasattr(tag, 'name'):
                 continue
-            if str(tag).lower().find('.pdf'):
-                if tag.find('div', {'class': 'gs_ttss'}):
-                    self._parse_links(tag.find('div', {'class': 'gs_ttss'}))
+#           if str(tag).lower().find('.pdf'):
+#               if tag.find('div', {'class': 'gs_ttss'}):
+#                   self._parse_links(tag.find('div', {'class': 'gs_ttss'}))
 
             if tag.name == 'div' and self._tag_has_class(tag, 'gs_ri'):
                 # There are (at least) two formats here. In the first
@@ -753,11 +760,13 @@ class SearchScholarQuery(ScholarQuery):
         + '&as_oq=%(words_some)s' \
         + '&as_eq=%(words_none)s' \
         + '&as_occt=%(scope)s' \
+        + '&start=%(start)s' \
         + '&as_sauthors=%(authors)s' \
         + '&as_publication=%(pub)s' \
         + '&as_ylo=%(ylo)s' \
         + '&as_yhi=%(yhi)s' \
         + '&as_vis=%(citations)s' \
+        + '&start=%(start)s' \
         + '&btnG=&hl=en' \
         + '%(num)s' \
         + '&as_sdt=%(patents)s%%2C5'
@@ -766,12 +775,14 @@ class SearchScholarQuery(ScholarQuery):
         ScholarQuery.__init__(self)
         self._add_attribute_type('num_results', 'Results', 0)
         self.words = None # The default search behavior
+        self.start = None
         self.words_some = None # At least one of those words
         self.words_none = None # None of these words
         self.phrase = None
         self.scope_title = False # If True, search in title only
         self.author = None
         self.pub = None
+        self.start = None
         self.timeframe = [None, None]
         self.include_patents = True
         self.include_citations = True
@@ -806,6 +817,18 @@ class SearchScholarQuery(ScholarQuery):
     def set_pub(self, pub):
         """Sets the publication in which the result must be found."""
         self.pub = pub
+
+#   def set_start(self, start):
+#       """
+#       Sets result offset for paging. Offset is in number of results, so
+#       should be a multiple of num/count.
+#       """
+#       self.start = ScholarUtils.ensure_int(start)
+
+    def set_start(self, start):
+        """Sets the offset of results, can be used to circumvent pagination."""
+        self.start = start
+
 
     def set_timeframe(self, start=None, end=None):
         """
@@ -851,6 +874,7 @@ class SearchScholarQuery(ScholarQuery):
                    'scope': 'title' if self.scope_title else 'any',
                    'authors': self.author or '',
                    'pub': self.pub or '',
+                   'start': self.start or '',
                    'ylo': self.timeframe[0] or '',
                    'yhi': self.timeframe[1] or '',
                    'patents': '0' if self.include_patents else '1',
@@ -881,10 +905,11 @@ class ScholarSettings(object):
 
     def __init__(self):
         self.citform = 0 # Citation format, default none
-        self.per_page_results = None
+        self.per_page_results = 10
         self._is_configured = False
 
     def set_citation_format(self, citform):
+    #   logging.info('%s,%i','citform',citform)
         citform = ScholarUtils.ensure_int(citform)
         if citform < 0 or citform > self.CITFORM_BIBTEX:
             raise FormatError('citation format invalid, is "%s"'
@@ -893,6 +918,8 @@ class ScholarSettings(object):
         self._is_configured = True
 
     def set_per_page_results(self, per_page_results):
+    #   print(per_page_results, ScholarConf.MAX_PAGE_RESULTS)
+    #   logging.info('%s: %i','per_page_results',per_page_results)
         self.per_page_results = ScholarUtils.ensure_int(
             per_page_results, 'page results must be integer')
         self.per_page_results = min(
@@ -977,7 +1004,6 @@ class ScholarQuerier(object):
                                        log_msg='dump of settings form HTML',
                                        err_msg='requesting settings failed')
         if html is None:
-            print self.SET_SETTINGS_URL % urlargs
             return False
 
         # Now parse the required stuff out of the form. We require the
@@ -985,7 +1011,7 @@ class ScholarQuerier(object):
         # to Google.
         soup = SoupKitchen.make_soup(html)
 
-      # tag = soup.find(name='form', attrs={'id': 'gs_settings_form'})
+#       tag = soup.find(name='form', attrs={'id': 'gs_settings_form'})
         tag = soup.find(name='form', attrs={'id': 'gs_bdy_frm'})
         if tag is None:
             ScholarUtils.log('info', 'parsing settings failed: no form')
@@ -1029,6 +1055,38 @@ class ScholarQuerier(object):
             return
 
         self.parse(html)
+
+    def get_citations(self,query):
+        """
+        Given a query, it retrieve the list of articles that cite the first 
+        article returned by the query.
+        It's done in two steps: first it retrieves the citations url of the 
+        first article, then it retrieves the articles that cite it
+        """
+        self.send_query(query)
+
+        if len(self.articles)==0 or self.articles[0]['url_citations'] is None:
+            return 
+        citations_url=self.articles[0]['url_citations']
+        citations_num=self.articles[0]['num_citations']
+        self.clear_articles()
+
+        html = self._get_http_response(url=citations_url,
+                                       log_msg='dump of query response HTML',
+                                       err_msg='results retrieval failed')
+        if html is None:
+            return
+        self.parse(html)
+        while len(self.articles)<citations_num:
+            # this is a workaround to fetch all the citations, ought to be better integrated at some point
+            time.sleep(1)
+            html = self._get_http_response(url=citations_url+'&start='+str(len(self.articles)),
+                                           log_msg='dump of query response HTML',
+                                           err_msg='results retrieval failed')
+            if html is None:
+                return
+
+            self.parse(html)
 
     def get_citation_data(self, article):
         """
@@ -1165,6 +1223,13 @@ scholar.py -c 1 -C 17749203648027613321 --citation bt
 # does not contain the words "quantum" and "theory":
 scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
 
+    print(datetime.datetime.now().strftime("# %I:%M%p on %B %d, %Y"))
+    print('# ',end='', flush=True)
+    for arg in sys.argv:
+        print(',',arg,end='', flush=True)
+    print('\n#')
+    
+
     fmt = optparse.IndentedHelpFormatter(max_help_position=50, width=100)
     parser = optparse.OptionParser(usage=usage, formatter=fmt)
     group = optparse.OptionGroup(parser, 'Query arguments',
@@ -1183,6 +1248,8 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
                      help='Search title only')
     group.add_option('-P', '--pub', metavar='PUBLICATIONS', default=None,
                      help='Results must have appeared in this publication')
+    group.add_option('-S', '--start', metavar='START', default=None,
+                     help='Select results starting from here, can be used to circumvent pagination')
     group.add_option('--after', metavar='YEAR', default=None,
                      help='Results must have appeared in or after given year')
     group.add_option('--before', metavar='YEAR', default=None,
@@ -1191,6 +1258,8 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
                      help='Do not include patents in results')
     group.add_option('--no-citations', action='store_true', default=False,
                      help='Do not include citations in results')
+    group.add_option('--citations-only', action='store_true', default=False,
+                     help='Prints only the citations list in results')
     group.add_option('-C', '--cluster-id', metavar='CLUSTER_ID', default=None,
                      help='Do not search, just use articles in given cluster ID')
     group.add_option('-c', '--count', type='int', default=None,
@@ -1249,6 +1318,7 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
             return 1
 
     querier = ScholarQuerier()
+
     settings = ScholarSettings()
 
     if options.citation == 'bt':
@@ -1283,6 +1353,8 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
             query.set_scope(True)
         if options.pub:
             query.set_pub(options.pub)
+        if options.start:
+            query.set_start(options.start)
         if options.after or options.before:
             query.set_timeframe(options.after, options.before)
         if options.no_patents:
@@ -1295,6 +1367,12 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
         query.set_num_page_results(options.count)
 
     querier.send_query(query)
+
+
+    if options.citations_only:
+        querier.get_citations(query)
+    else:
+        querier.send_query(query)
 
     if options.csv:
         csv(querier)
